@@ -1,0 +1,57 @@
+{
+  "CLM001": {
+    "claimId": "CLM001",
+    "notes": [
+      "Initial report received from customer. Vehicle was rear-ended while stopped at red light.",
+      "Police report indicates other driver was at fault - ran red light.",
+      "Customer complains of minor neck pain, requesting medical evaluation.",
+      "Vehicle damage assessment shows significant rear bumper and trunk damage.",
+      "Estimate from certified repair shop: $8,200 for parts and labor."
+    ],
+    "lastUpdated": "2024-01-16T10:30:00Z"
+  },
+  "CLM002": {
+    "claimId": "CLM002", 
+    "notes": [
+      "Customer reported burst pipe in basement at 3 AM during freezing temperatures.",
+      "Water damage affected finished basement, hardwood floors, and personal property.",
+      "Plumber's report confirms pipe failure due to inadequate insulation.", 
+      "Restoration company estimate: $12,000 for water extraction and repairs.",
+      "Customer provided receipts for damaged electronics and furniture totaling $3,000."
+    ],
+    "lastUpdated": "2024-01-13T14:20:00Z"
+  },
+  "CLM003": {
+    "claimId": "CLM003",
+    "notes": [
+      "Severe hailstorm in customer's area on January 8th confirmed by weather service.",
+      "Multiple dents on hood and cracked windshield documented with photos.",
+      "No other vehicle damage found during inspection.",
+      "Approved repair shop estimate: $3,150 including windshield replacement.",
+      "Fast-track approval given due to clear weather-related cause."
+    ],
+    "lastUpdated": "2024-01-09T16:45:00Z"
+  },
+  "CLM004": {
+    "claimId": "CLM004",
+    "notes": [
+      "Customer visited ER with chest pain and shortness of breath.",
+      "EKG and blood tests performed - results showed anxiety-related symptoms.",
+      "Discharged after 4 hours of observation with clean bill of health.",
+      "Missing: itemized hospital bill and physician notes.",
+      "Follow-up call scheduled with customer to obtain required documentation."
+    ],
+    "lastUpdated": "2024-01-21T09:15:00Z"
+  },
+  "CLM005": {
+    "claimId": "CLM005",
+    "notes": [
+      "Kitchen fire started from faulty electrical outlet behind stove.",
+      "Fire department report confirms electrical origin - no negligence found.",
+      "Significant smoke and fire damage to kitchen cabinets, appliances, and adjoining dining room.",
+      "Electrical inspection required before reconstruction can begin.",
+      "Customer relocated to temporary housing - rental assistance approved."
+    ],
+    "lastUpdated": "2024-01-19T11:00:00Z"
+  }
+}

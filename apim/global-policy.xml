@@ -1,0 +1,32 @@
+<!--
+    - Policies are applied in the order they appear.
+    - Position <base/> inside a section to inherit policies from the outer scope.
+    - Comments within policies are not preserved.
+-->
+<!-- Global APIM Policy - Fixed for service-level scope -->
+<!-- Note: <base/> and validate-subscription-key are not valid at global level -->
+<policies>
+  <!-- Throttle, authorize, validate, cache, or transform the requests -->
+  <inbound>
+    <!-- Route all calls to the backend service defined in APIM -->
+    <set-backend-service backend-id="claim-status-backend" />
+    <cors allow-credentials="false">
+      <allowed-origins>
+        <origin>*</origin>
+      </allowed-origins>
+      <allowed-methods>
+        <method>*</method>
+      </allowed-methods>
+      <allowed-headers>
+        <header>*</header>
+      </allowed-headers>
+    </cors>
+  </inbound>
+  <backend>
+    <forward-request />
+  </backend>
+  <outbound>
+  </outbound>
+  <on-error>
+  </on-error>
+</policies>

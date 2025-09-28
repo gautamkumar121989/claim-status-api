@@ -1,0 +1,269 @@
+# Azure DevOps CI/CD Pipeline for Claim Status API
+# Builds container image, performs security scanning, and deploys to Azure Container Apps
+
+trigger:
+  branches:
+    include:
+    - main
+    - develop
+  paths:
+    include:
+    - src/*
+    - mocks/*
+    - Dockerfile
+    - pipelines/azure-pipelines.yml
+
+variables:
+  # Build variables
+  dockerRegistryServiceConnection: 'acr-connection'
+  containerRegistry: 'claimsacr.azurecr.io'
+  imageRepository: 'claim-status-api'
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
+  tag: '$(Build.BuildId)'
+  
+  # Azure resources
+  resourceGroupName: 'claims-lab-rg'
+  bicepPrefix: 'claims'
+  bicepEnvironment: 'dev'
+  deploymentName: 'claims-deploy-$(Build.BuildId)'
+
+  # Security scanning
+  trivyVersion: '0.44.0'
+
+stages:
+- stage: Build
+  displayName: 'Build and Push Image'
+  jobs:
+  - job: Build
+    displayName: 'Build Docker Image'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: Docker@2
+      displayName: 'Build Docker Image'
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'build'
+        Dockerfile: '$(dockerfilePath)'
+        tags: |
+          $(tag)
+          latest
+        arguments: '--build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") --build-arg BUILD_VERSION=$(Build.BuildId)'
+
+    - task: Docker@2
+      displayName: 'Push Image to ACR'
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'push'
+        tags: |
+          $(tag)
+          latest
+
+- stage: SecurityScan
+  displayName: 'Security Scanning'
+  dependsOn: Build
+  jobs:
+  - job: ContainerScan
+    displayName: 'Container Security Scan'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - script: |
+        sudo apt-get update
+        sudo apt-get install wget apt-transport-https gnupg lsb-release
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+        echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+        sudo apt-get update
+        sudo apt-get install trivy
+      displayName: 'Install Trivy Scanner'
+
+    - task: AzureCLI@2
+      displayName: 'Login to ACR and Scan Image'
+      inputs:
+        azureSubscription: 'azure-subscription'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          # Login to ACR
+          az acr login --name $(echo $(containerRegistry) | cut -d'.' -f1)
+          
+          # Pull and scan the image
+          docker pull $(containerRegistry)/$(imageRepository):$(tag)
+          
+          # Run Trivy scan
+          trivy image --format json --output trivy-results.json $(containerRegistry)/$(imageRepository):$(tag)
+          
+          # Check for HIGH and CRITICAL vulnerabilities
+          HIGH_COUNT=$(cat trivy-results.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length')
+          CRITICAL_COUNT=$(cat trivy-results.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length')
+          
+          echo "High vulnerabilities found: $HIGH_COUNT"
+          echo "Critical vulnerabilities found: $CRITICAL_COUNT"
+          
+          # Create summary for scans directory
+          mkdir -p $(Build.ArtifactStagingDirectory)/scans
+          echo "# Security Scan Results" > $(Build.ArtifactStagingDirectory)/scans/scan-summary.md
+          echo "- **Build ID:** $(Build.BuildId)" >> $(Build.ArtifactStagingDirectory)/scans/scan-summary.md
+          echo "- **Image:** $(containerRegistry)/$(imageRepository):$(tag)" >> $(Build.ArtifactStagingDirectory)/scans/scan-summary.md
+          echo "- **Critical Vulnerabilities:** $CRITICAL_COUNT" >> $(Build.ArtifactStagingDirectory)/scans/scan-summary.md
+          echo "- **High Vulnerabilities:** $HIGH_COUNT" >> $(Build.ArtifactStagingDirectory)/scans/scan-summary.md
+          echo "- **Scan Date:** $(date)" >> $(Build.ArtifactStagingDirectory)/scans/scan-summary.md
+          
+          # Copy full results
+          cp trivy-results.json $(Build.ArtifactStagingDirectory)/scans/
+          
+          # Fail if critical vulnerabilities found (configurable gate)
+          if [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "##vso[task.logissue type=error]Critical vulnerabilities found! Failing pipeline."
+            exit 1
+          fi
+          
+          echo "Security scan completed successfully"
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Security Scan Results'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/scans'
+        ArtifactName: 'security-scans'
+
+- stage: Deploy
+  displayName: 'Deploy to Azure Container Apps'
+  dependsOn: SecurityScan
+  condition: succeeded()
+  variables:
+    deploymentTimestamp: $[format('{0:yyyyMMddHHmmss}', pipeline.startTime)]
+  jobs:
+  - deployment: DeployACA
+    displayName: 'Deploy to Container Apps'
+    environment: 'production'
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            displayName: 'Get Resource Names from Deployment'
+            inputs:
+              azureSubscription: 'azure-subscription'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                # Get the latest deployment for this resource group
+                LATEST_DEPLOYMENT=$(az deployment group list \
+                  -g $(resourceGroupName) \
+                  --query "max_by([], &properties.timestamp).name" -o tsv)
+                
+                echo "Using deployment: $LATEST_DEPLOYMENT"
+                echo "##vso[task.setvariable variable=actualDeploymentName;isOutput=true]$LATEST_DEPLOYMENT"
+                
+                CONTAINER_APP_NAME=$(az deployment group show \
+                  -g $(resourceGroupName) \
+                  -n $LATEST_DEPLOYMENT \
+                  --query "properties.outputs.containerAppName.value" -o tsv)
+                APIM_NAME=$(az deployment group show \
+                  -g $(resourceGroupName) \
+                  -n $LATEST_DEPLOYMENT \
+                  --query "properties.outputs.apiManagementName.value" -o tsv)
+                
+                echo "##vso[task.setvariable variable=resolvedContainerAppName]$CONTAINER_APP_NAME"
+                echo "##vso[task.setvariable variable=resolvedApimName]$APIM_NAME"
+
+          - task: AzureCLI@2
+            displayName: 'Deploy to Azure Container Apps'
+            inputs:
+              azureSubscription: 'azure-subscription'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                # Update Container App with new image
+                az containerapp update \
+                  --name $(resolvedContainerAppName) \
+                  --resource-group $(resourceGroupName) \
+                  --image $(containerRegistry)/$(imageRepository):$(tag) \
+                  --set-env-vars \
+                    NODE_ENV=production \
+                    PORT=3000
+
+          - task: AzureCLI@2
+            displayName: 'Configure APIM Backend'
+            inputs:
+              azureSubscription: 'azure-subscription'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                # Get Container App FQDN
+                FQDN=$(az containerapp show \
+                  --name $(resolvedContainerAppName) \
+                  --resource-group $(resourceGroupName) \
+                  --query properties.configuration.ingress.fqdn -o tsv)
+                
+                echo "Container App FQDN: $FQDN"
+                
+                # Update APIM backend using resolved name
+                az apim backend update \
+                  --resource-group $(resourceGroupName) \
+                  --service-name $(resolvedApimName) \
+                  --backend-id claim-status-backend \
+                  --url "https://$FQDN"
+
+- stage: SmokeTests
+  displayName: 'Smoke Tests'
+  dependsOn: Deploy
+  jobs:
+  - job: TestEndpoints
+    displayName: 'Test API Endpoints'
+    pool:
+      vmImage: 'ubuntu-latest'
+    variables:
+      # Define the deployment name pattern here
+      latestDeploymentName: 'claims-deploy-latest'
+    steps:
+    - task: AzureCLI@2
+      displayName: 'Run Smoke Tests'
+      inputs:
+        azureSubscription: 'azure-subscription'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -e  # Exit on any error
+          
+          # Get the most recent deployment
+          LATEST_DEPLOYMENT=$(az deployment group list \
+            -g $(resourceGroupName) \
+            --query "max_by([], &properties.timestamp).name" -o tsv)
+        
+          if [ -z "$LATEST_DEPLOYMENT" ]; then
+            echo "##vso[task.logissue type=error]No deployments found in resource group"
+            exit 1
+          fi
+          
+          echo "Using deployment: $LATEST_DEPLOYMENT"
+          
+          # Get APIM details from the latest deployment
+          APIM_NAME=$(az deployment group show \
+            -g $(resourceGroupName) \
+            -n $LATEST_DEPLOYMENT \
+            --query "properties.outputs.apiManagementName.value" -o tsv)
+          
+          APIM_URL=$(az apim show \
+            --name $APIM_NAME \
+            --resource-group $(resourceGroupName) \
+            --query gatewayUrl -o tsv)
+          
+          echo "Testing APIM Gateway: $APIM_URL"
+          
+          # Test endpoints with correct paths
+          curl -f "$APIM_URL/claim-status/health" \
+            -H "Ocp-Apim-Subscription-Key: $(apim-subscription-key)" || exit 1
+          
+          curl -f "$APIM_URL/claim-status/claims/CLM001" \
+            -H "Ocp-Apim-Subscription-Key: $(apim-subscription-key)" || exit 1
+          
+          curl -f -X POST "$APIM_URL/claim-status/claims/CLM001/summarize" \
+            -H "Ocp-Apim-Subscription-Key: $(apim-subscription-key)" \
+            -H "Content-Type: application/json" || exit 1
+          
+          echo "All smoke tests passed!"

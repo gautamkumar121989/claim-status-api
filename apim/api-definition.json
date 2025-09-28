@@ -1,0 +1,198 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Claim Status API",
+    "description": "API for retrieving claim status and generating AI-powered summaries",
+    "version": "1.0.0"
+  },
+  "host": "claims-apim.azure-api.net",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "securityDefinitions": {
+    "apiKeyHeader": {
+      "type": "apiKey",
+      "name": "Ocp-Apim-Subscription-Key",
+      "in": "header"
+    }
+  },
+  "security": [
+    {
+      "apiKeyHeader": []
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "description": "Returns API health status",
+        "operationId": "Health",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "timestamp": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-backend": {
+          "service": "claim-status-backend"
+        }
+      }
+    },
+    "/claims/{id}": {
+      "get": {
+        "summary": "Get claim status by ID",
+        "description": "Retrieves the current status and details of a specific claim",
+        "operationId": "GetClaimStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "The claim ID to retrieve"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Claim details retrieved successfully",
+            "schema": {
+              "$ref": "#/definitions/ClaimResponse"
+            }
+          },
+          "404": {
+            "description": "Claim not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          }
+        },
+        "x-ms-backend": {
+          "service": "claim-status-backend"
+        }
+      }
+    },
+    "/claims/{id}/summarize": {
+      "post": {
+        "summary": "Generate AI summary for claim",
+        "description": "Generates customer and adjuster summaries using Azure OpenAI based on claim notes",
+        "operationId": "SummarizeClaim",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "The claim ID to summarize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Summary generated successfully",
+            "schema": {
+              "$ref": "#/definitions/SummaryResponse"
+            }
+          },
+          "404": {
+            "description": "Claim or notes not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "500": {
+            "description": "AI service error"
+          }
+        },
+        "x-ms-backend": {
+          "service": "claim-status-backend"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ClaimResponse": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique claim identifier"
+        },
+        "claimNumber": {
+          "type": "string",
+          "description": "Human-readable claim number"
+        },
+        "type": {
+          "type": "string",
+          "description": "Type of claim (auto, property, health, etc.)"
+        },
+        "status": {
+          "type": "string",
+          "description": "Current claim status"
+        },
+        "customerName": {
+          "type": "string",
+          "description": "Name of the customer"
+        },
+        "estimatedAmount": {
+          "type": "number",
+          "format": "double",
+          "description": "Estimated claim amount"
+        },
+        "incidentDate": {
+          "type": "string",
+          "format": "date",
+          "description": "Date of the incident"
+        }
+      }
+    },
+    "SummaryResponse": {
+      "type": "object",
+      "properties": {
+        "claimId": {
+          "type": "string",
+          "description": "The claim ID"
+        },
+        "summary": {
+          "type": "string",
+          "description": "General claim summary"
+        },
+        "customerSummary": {
+          "type": "string",
+          "description": "Customer-facing summary"
+        },
+        "adjusterSummary": {
+          "type": "string",
+          "description": "Technical summary for adjusters"
+        },
+        "nextStep": {
+          "type": "string",
+          "description": "Recommended next action"
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when summary was generated"
+        }
+      }
+    }
+  }
+}
