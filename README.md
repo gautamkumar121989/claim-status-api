@@ -1,5 +1,11 @@
 # Claim Status API with GenAI Summaries - Azure Container Apps Lab
 
+[![Build Status](https://dev.azure.com/your-org/your-project/_apis/build/status/claim-status-api?branchName=main)](https://dev.azure.com/your-org/your-project/_build/latest?definitionId=1&branchName=main)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Azure](https://img.shields.io/badge/Azure-Container%20Apps-blue)](https://azure.microsoft.com/en-us/products/container-apps)
+[![Node.js](https://img.shields.io/badge/Node.js-18+-green)](https://nodejs.org/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-blue)](https://www.docker.com/)
+
 This repository contains a complete implementation of the "Claim Status API with GenAI Summaries" hands-on lab, featuring a containerized Node.js API deployed on Azure Container Apps with comprehensive monitoring, security scanning, and AI-powered claim summarization.
 
 ## 🏗️ Architecture Overview

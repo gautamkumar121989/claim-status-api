@@ -110,3 +110,34 @@ deploy/
 # Test files
 test-results/
 coverage/
+
+# Azure specific files
+*.publishsettings
+*.azurePubxml
+deployment-outputs.json
+*.parameters.json
+
+# Bicep compiled files
+*.json
+!apim/api-definition.json
+!mocks/*.json
+!package.json
+
+# Local Azure CLI cache
+.azure/
+
+# Container build context
+.dockerignore
+
+# Log files
+*.log
+logs/
+
+# IDE and editor files
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
