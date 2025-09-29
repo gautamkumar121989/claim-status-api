@@ -149,31 +149,61 @@ jobs:
     - name: Get Resource Names from Latest Deployment
       id: get-resources
       run: |
-        # Get the most recent successful deployment for this resource group
-        LATEST_DEPLOYMENT=$(az deployment group list \
-          -g ${{ env.RESOURCE_GROUP }} \
-          --query "max_by([?properties.provisioningState=='Succeeded'], &properties.timestamp).name" -o tsv)
+        # Debug: List all deployments to see what's available
+        echo "### All Deployments in Resource Group ###"
+        az deployment group list -g ${{ env.RESOURCE_GROUP }} \
+          --query "[].{name:name, state:properties.provisioningState, timestamp:properties.timestamp}" -o table
         
-        if [ -z "$LATEST_DEPLOYMENT" ] || [ "$LATEST_DEPLOYMENT" = "null" ]; then
-          echo "::error::No successful deployments found in resource group ${{ env.RESOURCE_GROUP }}"
-          echo "Please ensure infrastructure has been deployed using the Bicep template first."
+        # Look for deployments with your naming pattern (claims-*)
+        BICEP_DEPLOYMENT=$(az deployment group list \
+          -g ${{ env.RESOURCE_GROUP }} \
+          --query "max_by([?contains(name, 'claims') && properties.provisioningState=='Succeeded'], &properties.timestamp).name" -o tsv)
+        
+        if [ -z "$BICEP_DEPLOYMENT" ] || [ "$BICEP_DEPLOYMENT" = "null" ]; then
+          echo "::warning::No Bicep deployment found with 'claims' prefix. Checking all successful deployments..."
+          
+          # Fallback: get the most recent successful deployment
+          LATEST_DEPLOYMENT=$(az deployment group list \
+            -g ${{ env.RESOURCE_GROUP }} \
+            --query "max_by([?properties.provisioningState=='Succeeded'], &properties.timestamp).name" -o tsv)
+          
+          echo "Latest deployment: $LATEST_DEPLOYMENT"
+          
+          # Show outputs of this deployment
+          echo "### Deployment Outputs ###"
+          az deployment group show \
+            -g ${{ env.RESOURCE_GROUP }} \
+            -n $LATEST_DEPLOYMENT \
+            --query "properties.outputs" -o json
+          
+          echo "::error::No infrastructure deployment found. Please deploy using Bicep first."
           exit 1
         fi
         
-        echo "Using deployment: $LATEST_DEPLOYMENT"
+        echo "Using Bicep deployment: $BICEP_DEPLOYMENT"
         
         # Get resource names from deployment outputs
         CONTAINER_APP_NAME=$(az deployment group show \
           -g ${{ env.RESOURCE_GROUP }} \
-          -n $LATEST_DEPLOYMENT \
-          --query "properties.outputs.containerAppName.value" -o tsv)
+          -n $BICEP_DEPLOYMENT \
+          --query "properties.outputs.containerAppName.value" -o tsv 2>/dev/null || echo "")
         APIM_NAME=$(az deployment group show \
           -g ${{ env.RESOURCE_GROUP }} \
-          -n $LATEST_DEPLOYMENT \
-          --query "properties.outputs.apiManagementName.value" -o tsv)
+          -n $BICEP_DEPLOYMENT \
+          --query "properties.outputs.apiManagementName.value" -o tsv 2>/dev/null || echo "")
         
-        if [ -z "$CONTAINER_APP_NAME" ] || [ "$APIM_NAME" = "null" ]; then
+        if [ -z "$CONTAINER_APP_NAME" ] || [ -z "$APIM_NAME" ]; then
           echo "::error::Failed to retrieve resource names from deployment outputs"
+          echo "Container App Name: $CONTAINER_APP_NAME"
+          echo "APIM Name: $APIM_NAME"
+          
+          # Show available outputs for debugging
+          echo "Available outputs:"
+          az deployment group show \
+            -g ${{ env.RESOURCE_GROUP }} \
+            -n $BICEP_DEPLOYMENT \
+            --query "properties.outputs" -o json
+          
           exit 1
         fi
         
@@ -181,7 +211,7 @@ jobs:
         echo "apim-name=$APIM_NAME" >> $GITHUB_OUTPUT
         
         echo "### Deployment Resources 🚀" >> $GITHUB_STEP_SUMMARY
-        echo "- **Deployment:** $LATEST_DEPLOYMENT" >> $GITHUB_STEP_SUMMARY
+        echo "- **Deployment:** $BICEP_DEPLOYMENT" >> $GITHUB_STEP_SUMMARY
         echo "- **Container App:** $CONTAINER_APP_NAME" >> $GITHUB_STEP_SUMMARY
         echo "- **API Management:** $APIM_NAME" >> $GITHUB_STEP_SUMMARY
 
