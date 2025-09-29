@@ -247,21 +247,9 @@ jobs:
               }
           }
         
-        echo "### Deployment Complete ✅" >> $GITHUB_STEP_SUMMARY
-        echo "- **Container App URL:** https://$FQDN" >> $GITHUB_STEP_SUMMARY
-        echo "- **APIM Backend:** Updated/Created" >> $GITHUB_STEP_SUMMARY
-        echo "- **Image Version:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-
-    - name: Deploy APIM Policies and APIs
-      if: steps.get-resources.outputs.apim-name != ''
-      run: |
-        echo "### Deploying APIM Configuration ###"
-        
-        # Check if API definition exists in the repo
+        # Basic API import only (no policies)
         if [ -f "apim/api-definition.json" ]; then
-          echo "Deploying API definition..."
-          
-          # Import API definition (this will create or update the API)
+          echo "Importing API definition..."
           az apim api import \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --service-name ${{ steps.get-resources.outputs.apim-name }} \
@@ -276,55 +264,13 @@ jobs:
           echo "::warning::No API definition found at apim/api-definition.json"
         fi
         
-        # Apply global policy if exists
-        if [ -f "apim/global-policy.xml" ]; then
-          echo "Applying global policy..."
-          az apim policy set \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --service-name ${{ steps.get-resources.outputs.apim-name }} \
-            --policy-format xml \
-            --value @apim/global-policy.xml || {
-              echo "::warning::Failed to apply global policy"
-            }
-        fi
-        
-        # Apply API-specific policies
-        if [ -f "apim/get-claim-policy.xml" ]; then
-          echo "Applying GET claims policy..."
-          az apim api operation policy set \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --service-name ${{ steps.get-resources.outputs.apim-name }} \
-            --api-id claim-status-api \
-            --operation-id get-claim \
-            --policy-format xml \
-            --value @apim/get-claim-policy.xml || {
-              echo "::warning::Failed to apply GET claims policy"
-            }
-        fi
-        
-        if [ -f "apim/post-summarize-policy.xml" ]; then
-          echo "Applying POST summarize policy..."
-          az apim api operation policy set \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --service-name ${{ steps.get-resources.outputs.apim-name }} \
-            --api-id claim-status-api \
-            --operation-id post-summarize \
-            --policy-format xml \
-            --value @apim/post-summarize-policy.xml || {
-              echo "::warning::Failed to apply POST summarize policy"
-            }
-        fi
-        
-        # Before applying policies, list available operations
-        OPERATIONS=$(az apim api operation list \
-          --resource-group ${{ env.RESOURCE_GROUP }} \
-          --service-name ${{ steps.get-resources.outputs.apim-name }} \
-          --api-id claim-status-api \
-          --query "[].name" -o tsv 2>/dev/null || echo "")
+        echo "### Deployment Complete ✅" >> $GITHUB_STEP_SUMMARY
+        echo "- **Container App URL:** https://$FQDN" >> $GITHUB_STEP_SUMMARY
+        echo "- **APIM Backend:** Updated/Created" >> $GITHUB_STEP_SUMMARY
+        echo "- **API Definition:** Imported (policies not applied)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image Version:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
 
-        echo "Available operations: $OPERATIONS"
-        
-        echo "### APIM Configuration Complete ✅" >> $GITHUB_STEP_SUMMARY
+
 
     - name: Display Deployment Summary (No APIM)
       if: steps.get-resources.outputs.apim-name == ''
@@ -340,11 +286,7 @@ jobs:
         echo "- **Image Version:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Note:** APIM backend update skipped (no APIM service found)" >> $GITHUB_STEP_SUMMARY
 
-    - name: Rollback on Failure
-      if: failure()
-      run: |
-        echo "Deployment failed, considering rollback to previous revision"
-        # Get previous revision and rollback logic here
+
 
     - name: Azure Logout
       if: always()
