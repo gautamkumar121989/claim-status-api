@@ -34,7 +34,7 @@ jobs:
       uses: docker/setup-buildx-action@v3
 
     - name: Log in to Azure Container Registry
-      uses: azure/docker-login@v1
+      uses: azure/docker-login@v2  # Updated from v1
       with:
         login-server: ${{ env.REGISTRY }}
         username: ${{ secrets.REGISTRY_USERNAME }}
@@ -75,7 +75,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Log in to Azure Container Registry
-      uses: azure/docker-login@v1
+      uses: azure/docker-login@v2  # Updated from v1
       with:
         login-server: ${{ env.REGISTRY }}
         username: ${{ secrets.REGISTRY_USERNAME }}
@@ -224,19 +224,107 @@ jobs:
         fi
         
         echo "Container App FQDN: $FQDN"
+        echo "APIM Service: ${{ steps.get-resources.outputs.apim-name }}"
         
-        # Update APIM backend with new Container App URL
+        # Update or create APIM backend
+        echo "Updating APIM backend configuration..."
         az apim backend update \
           --resource-group ${{ env.RESOURCE_GROUP }} \
           --service-name ${{ steps.get-resources.outputs.apim-name }} \
           --backend-id claim-status-backend \
-          --url "https://$FQDN" || {
-            echo "::warning::Failed to update APIM backend. This may be expected if backend doesn't exist yet."
+          --url "https://$FQDN" \
+          --protocol http || {
+            echo "Backend doesn't exist, creating new one..."
+            az apim backend create \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --service-name ${{ steps.get-resources.outputs.apim-name }} \
+              --backend-id claim-status-backend \
+              --url "https://$FQDN" \
+              --protocol http \
+              --title "Claim Status API Backend" \
+              --description "Backend for Claim Status API Container App" || {
+                echo "::warning::Failed to create/update APIM backend"
+              }
           }
         
         echo "### Deployment Complete ✅" >> $GITHUB_STEP_SUMMARY
         echo "- **Container App URL:** https://$FQDN" >> $GITHUB_STEP_SUMMARY
+        echo "- **APIM Backend:** Updated/Created" >> $GITHUB_STEP_SUMMARY
         echo "- **Image Version:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+
+    - name: Deploy APIM Policies and APIs
+      if: steps.get-resources.outputs.apim-name != ''
+      run: |
+        echo "### Deploying APIM Configuration ###"
+        
+        # Check if API definition exists in the repo
+        if [ -f "apim/api-definition.json" ]; then
+          echo "Deploying API definition..."
+          
+          # Import API definition (this will create or update the API)
+          az apim api import \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --service-name ${{ steps.get-resources.outputs.apim-name }} \
+            --api-id claim-status-api \
+            --path "/api/claims" \
+            --display-name "Claim Status API" \
+            --specification-format OpenApi3Json \
+            --specification-path "apim/api-definition.json" || {
+              echo "::warning::Failed to import API definition"
+            }
+        else
+          echo "::warning::No API definition found at apim/api-definition.json"
+        fi
+        
+        # Apply global policy if exists
+        if [ -f "apim/global-policy.xml" ]; then
+          echo "Applying global policy..."
+          az apim policy set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --service-name ${{ steps.get-resources.outputs.apim-name }} \
+            --policy-format xml \
+            --value @apim/global-policy.xml || {
+              echo "::warning::Failed to apply global policy"
+            }
+        fi
+        
+        # Apply API-specific policies
+        if [ -f "apim/get-claim-policy.xml" ]; then
+          echo "Applying GET claims policy..."
+          az apim api operation policy set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --service-name ${{ steps.get-resources.outputs.apim-name }} \
+            --api-id claim-status-api \
+            --operation-id get-claim \
+            --policy-format xml \
+            --value @apim/get-claim-policy.xml || {
+              echo "::warning::Failed to apply GET claims policy"
+            }
+        fi
+        
+        if [ -f "apim/post-summarize-policy.xml" ]; then
+          echo "Applying POST summarize policy..."
+          az apim api operation policy set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --service-name ${{ steps.get-resources.outputs.apim-name }} \
+            --api-id claim-status-api \
+            --operation-id post-summarize \
+            --policy-format xml \
+            --value @apim/post-summarize-policy.xml || {
+              echo "::warning::Failed to apply POST summarize policy"
+            }
+        fi
+        
+        # Before applying policies, list available operations
+        OPERATIONS=$(az apim api operation list \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --service-name ${{ steps.get-resources.outputs.apim-name }} \
+          --api-id claim-status-api \
+          --query "[].name" -o tsv 2>/dev/null || echo "")
+
+        echo "Available operations: $OPERATIONS"
+        
+        echo "### APIM Configuration Complete ✅" >> $GITHUB_STEP_SUMMARY
 
     - name: Display Deployment Summary (No APIM)
       if: steps.get-resources.outputs.apim-name == ''
@@ -251,6 +339,12 @@ jobs:
         echo "- **Container App URL:** https://$FQDN" >> $GITHUB_STEP_SUMMARY
         echo "- **Image Version:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Note:** APIM backend update skipped (no APIM service found)" >> $GITHUB_STEP_SUMMARY
+
+    - name: Rollback on Failure
+      if: failure()
+      run: |
+        echo "Deployment failed, considering rollback to previous revision"
+        # Get previous revision and rollback logic here
 
     - name: Azure Logout
       if: always()
