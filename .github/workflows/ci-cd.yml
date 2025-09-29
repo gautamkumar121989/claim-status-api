@@ -146,74 +146,56 @@ jobs:
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    - name: Get Resource Names from Latest Deployment
+    - name: Discover Azure Resources
       id: get-resources
       run: |
-        # Debug: List all deployments to see what's available
-        echo "### All Deployments in Resource Group ###"
-        az deployment group list -g ${{ env.RESOURCE_GROUP }} \
-          --query "[].{name:name, state:properties.provisioningState, timestamp:properties.timestamp}" -o table
+        echo "### Discovering Resources in Resource Group ###"
         
-        # Look for deployments with your naming pattern (claims-*)
-        BICEP_DEPLOYMENT=$(az deployment group list \
+        # List all resources in the resource group for debugging
+        echo "All resources in ${{ env.RESOURCE_GROUP }}:"
+        az resource list -g ${{ env.RESOURCE_GROUP }} \
+          --query "[].{name:name, type:type, location:location}" -o table
+        
+        # Find Container App (look for any containerapp in the resource group)
+        CONTAINER_APP_NAME=$(az containerapp list \
           -g ${{ env.RESOURCE_GROUP }} \
-          --query "max_by([?contains(name, 'claims') && properties.provisioningState=='Succeeded'], &properties.timestamp).name" -o tsv)
+          --query "[0].name" -o tsv 2>/dev/null || echo "")
         
-        if [ -z "$BICEP_DEPLOYMENT" ] || [ "$BICEP_DEPLOYMENT" = "null" ]; then
-          echo "::warning::No Bicep deployment found with 'claims' prefix. Checking all successful deployments..."
-          
-          # Fallback: get the most recent successful deployment
-          LATEST_DEPLOYMENT=$(az deployment group list \
-            -g ${{ env.RESOURCE_GROUP }} \
-            --query "max_by([?properties.provisioningState=='Succeeded'], &properties.timestamp).name" -o tsv)
-          
-          echo "Latest deployment: $LATEST_DEPLOYMENT"
-          
-          # Show outputs of this deployment
-          echo "### Deployment Outputs ###"
-          az deployment group show \
-            -g ${{ env.RESOURCE_GROUP }} \
-            -n $LATEST_DEPLOYMENT \
-            --query "properties.outputs" -o json
-          
-          echo "::error::No infrastructure deployment found. Please deploy using Bicep first."
+        # Find API Management service (look for any APIM in the resource group)
+        APIM_NAME=$(az apim list \
+          -g ${{ env.RESOURCE_GROUP }} \
+          --query "[0].name" -o tsv 2>/dev/null || echo "")
+        
+        # Check if Container App was found
+        if [ -z "$CONTAINER_APP_NAME" ] || [ "$CONTAINER_APP_NAME" = "null" ]; then
+          echo "::error::No Container App found in resource group ${{ env.RESOURCE_GROUP }}"
+          echo "Please ensure you have created a Container App manually in the Azure Portal"
+          echo "Available Container Apps:"
+          az containerapp list -g ${{ env.RESOURCE_GROUP }} --query "[].name" -o table || echo "None found"
           exit 1
         fi
         
-        echo "Using Bicep deployment: $BICEP_DEPLOYMENT"
-        
-        # Get resource names from deployment outputs
-        CONTAINER_APP_NAME=$(az deployment group show \
-          -g ${{ env.RESOURCE_GROUP }} \
-          -n $BICEP_DEPLOYMENT \
-          --query "properties.outputs.containerAppName.value" -o tsv 2>/dev/null || echo "")
-        APIM_NAME=$(az deployment group show \
-          -g ${{ env.RESOURCE_GROUP }} \
-          -n $BICEP_DEPLOYMENT \
-          --query "properties.outputs.apiManagementName.value" -o tsv 2>/dev/null || echo "")
-        
-        if [ -z "$CONTAINER_APP_NAME" ] || [ -z "$APIM_NAME" ]; then
-          echo "::error::Failed to retrieve resource names from deployment outputs"
-          echo "Container App Name: $CONTAINER_APP_NAME"
-          echo "APIM Name: $APIM_NAME"
-          
-          # Show available outputs for debugging
-          echo "Available outputs:"
-          az deployment group show \
-            -g ${{ env.RESOURCE_GROUP }} \
-            -n $BICEP_DEPLOYMENT \
-            --query "properties.outputs" -o json
-          
-          exit 1
+        # APIM is optional - warn if not found but don't fail
+        if [ -z "$APIM_NAME" ] || [ "$APIM_NAME" = "null" ]; then
+          echo "::warning::No API Management service found in resource group"
+          echo "APIM backend update will be skipped"
+          APIM_NAME=""
         fi
         
+        echo "### Discovered Resources ✅" >> $GITHUB_STEP_SUMMARY
+        echo "- **Container App:** $CONTAINER_APP_NAME" >> $GITHUB_STEP_SUMMARY
+        if [ -n "$APIM_NAME" ]; then
+          echo "- **API Management:** $APIM_NAME" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- **API Management:** Not found (will skip APIM update)" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Output the resource names for subsequent steps
         echo "container-app-name=$CONTAINER_APP_NAME" >> $GITHUB_OUTPUT
         echo "apim-name=$APIM_NAME" >> $GITHUB_OUTPUT
         
-        echo "### Deployment Resources 🚀" >> $GITHUB_STEP_SUMMARY
-        echo "- **Deployment:** $BICEP_DEPLOYMENT" >> $GITHUB_STEP_SUMMARY
-        echo "- **Container App:** $CONTAINER_APP_NAME" >> $GITHUB_STEP_SUMMARY
-        echo "- **API Management:** $APIM_NAME" >> $GITHUB_STEP_SUMMARY
+        echo "Found Container App: $CONTAINER_APP_NAME"
+        echo "Found APIM: $APIM_NAME"
 
     - name: Deploy to Azure Container Apps
       run: |
@@ -228,6 +210,7 @@ jobs:
             BUILD_VERSION=${{ github.run_number }}
 
     - name: Update APIM Backend Configuration
+      if: steps.get-resources.outputs.apim-name != ''
       run: |
         # Get Container App FQDN
         FQDN=$(az containerapp show \
@@ -254,6 +237,20 @@ jobs:
         echo "### Deployment Complete ✅" >> $GITHUB_STEP_SUMMARY
         echo "- **Container App URL:** https://$FQDN" >> $GITHUB_STEP_SUMMARY
         echo "- **Image Version:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+
+    - name: Display Deployment Summary (No APIM)
+      if: steps.get-resources.outputs.apim-name == ''
+      run: |
+        # Get Container App FQDN
+        FQDN=$(az containerapp show \
+          --name ${{ steps.get-resources.outputs.container-app-name }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --query properties.configuration.ingress.fqdn -o tsv)
+        
+        echo "### Deployment Complete ✅" >> $GITHUB_STEP_SUMMARY
+        echo "- **Container App URL:** https://$FQDN" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image Version:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Note:** APIM backend update skipped (no APIM service found)" >> $GITHUB_STEP_SUMMARY
 
     - name: Azure Logout
       if: always()
