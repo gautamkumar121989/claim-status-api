@@ -64,9 +64,9 @@ docker run -p 3000:3000 --env-file .env claim-status-api
 ### Option A: Automated Deployment (Recommended)
 ```bash
 # Set your parameters
-export SUBSCRIPTION_ID="07928e17-b773-4485-9abb-02b4b095d5cc"
-export RESOURCE_GROUP="claims-api-lab-rg"
-export LOCATION="eastus"
+export SUBSCRIPTION_ID="<your-subscription-id>"
+export RESOURCE_GROUP="<your-resource-group>"
+export LOCATION="<your-region>"
 
 # Deploy using the helper script
 cd iac
@@ -77,8 +77,8 @@ cd ..
 ### Option B: Manual Step-by-Step Deployment
 ```bash
 # 1. Create resource group
-RESOURCE_GROUP="claims-api-lab-rg"
-LOCATION="eastus"
+RESOURCE_GROUP="<your-resource-group>"
+LOCATION="<your-region>"
 az group create --name $RESOURCE_GROUP --location $LOCATION
 
 # 2. Deploy infrastructure (generates names automatically)
@@ -251,90 +251,185 @@ Look for log lines: `AI summary generated - ClaimId: CLM001; ProcessingTime: <ms
 ### Alerts
 Deploy manually (Portal) or convert `observability/alert-rules.md` into ARM/CLI. (Future enhancement: add Bicep module.)
 
-## 🔄 CI/CD (Azure DevOps)
-1. Import repo into Azure DevOps project
-2. Create service connection (Azure Resource Manager) with access to resource group
-3. Set pipeline variables / variable group:
-   - RESOURCE_GROUP
-   - CONTAINER_REGISTRY (ACR name)
-   - CONTAINER_APP_NAME
-   - APIM_NAME
-   - OPENAI_ENDPOINT (optional)
-   - OPENAI_DEPLOYMENT_NAME
-4. Add secret variables (Library > Variable Group):
-   - AZURE_OPENAI_API_KEY (secret)
-5. Run pipeline; confirm stages: Build → SecurityScan → Deploy → SmokeTests
+## 🔄 CI/CD Pipelines
 
-## 🔄 CI/CD Pipeline Setup
+This project supports both GitHub Actions and Azure DevOps pipelines for maximum flexibility.
 
-### Required Variables
-Configure these variables in Azure DevOps:
+### 🐙 GitHub Actions (Recommended)
 
-**Variable Group: `claim-api-variables`**
-- `resourceGroupName`: Your resource group name
-- `containerRegistry`: Your ACR login server  
-- `bicepPrefix`: claims
-- `bicepEnvironment`: dev
+The GitHub Actions workflow provides a comprehensive CI/CD pipeline with security scanning, dynamic resource discovery, and automated deployment.
 
-**Secret Variables:**
-- `apim-subscription-key`: APIM subscription key for testing
+#### Features
+- ✅ **Multi-stage pipeline**: Build → Security Scan → Deploy
+- ✅ **Trivy security scanning** with configurable gates
+- ✅ **Dynamic resource discovery** (finds Container Apps and APIM automatically)
+- ✅ **APIM integration** with API definition import
+- ✅ **Environment protection** for production deployments
+- ✅ **Comprehensive logging** and deployment summaries
 
-### Service Connections
-- `azure-subscription`: Azure Resource Manager connection
-- `acr-connection`: Container Registry connection
+#### Setup Instructions
 
-## 🧪 Local vs Cloud Differences
-| Concern | Local | Azure |
-|--------|-------|-------|
-| AI Summaries | Mock unless env vars set | Live if AOAI deployed |
-| Auth | None | APIM subscription key |
-| Rate limiting | None | APIM policy enforced |
-| Logging | stdout | Log Analytics + AI | 
-| Endpoint Base | http://localhost:3000 | https://<apim>/claim-status |
+1. **Fork/Clone Repository**
+   ```bash
+   git clone <your-repo-url>
+   cd claim-status-api
+   ```
+
+2. **Configure GitHub Secrets**
+   Go to your repository → Settings → Secrets and variables → Actions, and add:
+   
+   ```bash
+   # Azure Container Registry
+   REGISTRY_USERNAME=<your-acr-name>
+   REGISTRY_PASSWORD=<your-acr-admin-password>
+   
+   # Azure Service Principal (for deployment)
+   AZURE_CREDENTIALS='{
+     "clientId": "<service-principal-client-id>",
+     "clientSecret": "<service-principal-secret>",
+     "subscriptionId": "<subscription-id>",
+     "tenantId": "<tenant-id>"
+   }'
+   ```
+
+3. **Create Azure Service Principal**
+   ```bash
+   # Create service principal with contributor access to resource group
+   az ad sp create-for-rbac \
+     --name "github-actions-claims-api" \
+     --role contributor \
+     --scopes "/subscriptions/<subscription-id>/resourceGroups/<your-resource-group>" \
+     --sdk-auth
+   
+   # Copy the JSON output to AZURE_CREDENTIALS secret
+   ```
+
+4. **Update Environment Variables**
+   
+   Edit the workflow file [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) to match your setup:
+   ```yaml
+   env:
+     REGISTRY: <your-acr-name>.azurecr.io  # Your ACR login server
+     IMAGE_NAME: claim-status-api
+     RESOURCE_GROUP: <your-resource-group>  # Your resource group
+     BICEP_PREFIX: claims
+     BICEP_ENVIRONMENT: dev
+   ```
+
+5. **Trigger Deployment**
+   ```bash
+   # Push to master or develop branch
+   git add .
+   git commit -m "Initial deployment"
+   git push origin master
+   ```
+
+#### Workflow Stages
+
+**Stage 1: Build**
+- Builds Docker image with metadata
+- Pushes to Azure Container Registry
+- Tags image with branch name, SHA, and build number
+
+**Stage 2: Security Scan**
+- Pulls built image from ACR
+- Runs Trivy vulnerability scanner
+- Creates security report and summary
+- Fails on critical vulnerabilities (master branch only)
+
+**Stage 3: Deploy** (master branch only)
+- Discovers Azure resources dynamically
+- Updates Container App with new image
+- Configures APIM backend and imports API definition
+- Provides deployment summary with URLs
+
+#### Monitoring the Pipeline
+
+1. **View Workflow Runs**
+   - Go to your repository → Actions tab
+   - Click on the latest workflow run to see details
+
+2. **Check Deployment Status**
+   ```bash
+   # View Container App status
+   az containerapp show -n <container-app-name> -g <resource-group> --query "properties.runningStatus"
+   
+   # Check logs
+   az containerapp logs show -n <container-app-name> -g <resource-group> --follow
+   ```
+
+3. **Test Deployed API**
+   ```bash
+   # Get APIM subscription key
+   SUBSCRIPTION_KEY=$(az apim subscription list \
+     --resource-group <resource-group> \
+     --service-name <apim-name> \
+     --query "[0].primaryKey" -o tsv)
+   
+   # Test endpoints
+   curl -H "Ocp-Apim-Subscription-Key: $SUBSCRIPTION_KEY" \
+     https://<apim-gateway>/api/claims/health
+   ```
+
+### 🔷 Azure DevOps (Alternative)
+
+For organizations using Azure DevOps, a comprehensive pipeline is also available.
+
+#### Setup Instructions
+
+1. **Import Repository**
+   - Create new Azure DevOps project
+   - Import this Git repository
+
+2. **Create Service Connections**
+   ```bash
+   # Azure Resource Manager connection
+   # - Connection name: azure-subscription
+   # - Scope: Resource Group
+   # - Resource Group: <your-resource-group>
+   
+   # Container Registry connection  
+   # - Connection name: acr-connection
+   # - Registry: <your-acr-name>.azurecr.io
+   ```
+
+3. **Configure Variables**
+   
+   Create variable group `claim-api-variables`:
+   ```yaml
+   # Pipeline Variables
+   dockerRegistryServiceConnection: 'acr-connection'
+   containerRegistry: '<your-acr-name>.azurecr.io'
+   imageRepository: 'claim-status-api'
+   resourceGroupName: '<your-resource-group>'
+   bicepPrefix: 'claims'
+   bicepEnvironment: 'dev'
+   ```
+
+4. **Create Pipeline**
+   - New Pipeline → Azure Repos Git
+   - Select repository
+   - Existing Azure Pipelines YAML file
+   - Path: `/pipelines/azure-pipelines.yml`
+
+#### Pipeline Stages
+
+**Stage 1: Build**
+- Builds and pushes Docker image to ACR
+- Tags with build ID and latest
+
+**Stage 2: Security Scan**
+- Installs Trivy scanner
+- Scans container image for vulnerabilities
+- Publishes security scan artifacts
+- Configurable security gate for critical vulnerabilities
+
+**Stage 3: Deploy**
+- Gets resource names from Bicep deployment outputs
+- Updates Container App with new image
+- Configures APIM backend URL
 
 ## 🧹 Cleanup
 ```bash
 az group delete -n $RESOURCE_GROUP --yes --no-wait
-```
-
-## ⚠️ Troubleshooting
-
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| 404 on claim endpoints | API not imported to APIM | Re-run API import step with correct path |
-| 401 Unauthorized | Missing subscription key | Add `Ocp-Apim-Subscription-Key` header |
-| Empty AI summaries | OpenAI not configured | Set Azure OpenAI environment variables in Container App |
-| Container not updating | Old revision active | Check `az containerapp revision list` and set traffic |
-| Pipeline failures | Resource name mismatch | Use dynamic name resolution in pipeline |
-| ACR login failures | Incorrect credentials | Verify ACR admin user is enabled and credentials are correct |
-| Deployment timeouts | Resource dependencies | Check resource creation order in Bicep template |
-
-### Common Deployment Issues
-
-1. **Resource Names**: All resources use pattern `${prefix}-${type}-${environment}` except ACR which adds unique suffix
-2. **API Path**: APIM imports with `--path claim-status`, so all URLs need this prefix
-3. **Environment Variables**: Container App needs OpenAI endpoint and key secrets for AI features
-4. **Claim ID Format**: Both server and APIM validate `CLM###` pattern - invalid formats return 400
-
-### Deployment Verification Steps
-
-```bash
-# 1. Check if all resources were created
-az resource list -g $RESOURCE_GROUP --output table
-
-# 2. Verify Container App is running
-az containerapp show -n $CONTAINER_APP_NAME -g $RESOURCE_GROUP --query "properties.runningStatus"
-
-# 3. Check Container App logs for any startup issues
-az containerapp logs show -n $CONTAINER_APP_NAME -g $RESOURCE_GROUP --follow
-
-# 4. Test direct Container App endpoint (bypass APIM)
-curl https://$CONTAINER_APP_FQDN/health
-
-# 5. Test APIM endpoint with subscription key
-curl -H "Ocp-Apim-Subscription-Key: $SUBSCRIPTION_KEY" https://$APIM_GATEWAY_URL/claim-status/health
-
-# 6. Verify OpenAI integration (should work or gracefully fallback to mocks)
-curl -X POST -H "Ocp-Apim-Subscription-Key: $SUBSCRIPTION_KEY" \
-  https://$APIM_GATEWAY_URL/claim-status/claims/CLM001/summarize
 ```
