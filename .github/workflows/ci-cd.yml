@@ -1,0 +1,232 @@
+name: CI/CD - Claim Status API
+
+on:
+  push:
+    branches: [ master, develop ]
+    paths:
+      - 'src/**'
+      - 'mocks/**'
+      - 'Dockerfile'
+      - '.github/workflows/ci-cd.yml'
+  pull_request:
+    branches: [ master ]
+
+env:
+  REGISTRY: claimsacrcna.azurecr.io
+  IMAGE_NAME: claim-status-api
+  RESOURCE_GROUP: claims-api-lab-rg
+  BICEP_PREFIX: claims
+  BICEP_ENVIRONMENT: dev
+
+jobs:
+  build:
+    name: Build and Push Container Image
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Azure Container Registry
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.REGISTRY }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=${{ github.run_number }}
+
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          BUILD_VERSION=${{ github.run_number }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  security-scan:
+    name: Security Vulnerability Scan
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Log in to Azure Container Registry
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.REGISTRY }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+        format: 'json'
+        output: 'trivy-results.json'
+
+    - name: Process scan results
+      id: scan-results
+      run: |
+        # Install jq if not available
+        sudo apt-get update && sudo apt-get install -y jq
+        
+        # Count vulnerabilities by severity
+        if [ -f trivy-results.json ]; then
+          HIGH_COUNT=$(cat trivy-results.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length')
+          CRITICAL_COUNT=$(cat trivy-results.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length')
+          MEDIUM_COUNT=$(cat trivy-results.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length')
+        else
+          HIGH_COUNT=0
+          CRITICAL_COUNT=0
+          MEDIUM_COUNT=0
+        fi
+        
+        echo "high-count=$HIGH_COUNT" >> $GITHUB_OUTPUT
+        echo "critical-count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+        echo "medium-count=$MEDIUM_COUNT" >> $GITHUB_OUTPUT
+        
+        echo "### Security Scan Results 🔍" >> $GITHUB_STEP_SUMMARY
+        echo "- **Critical Vulnerabilities:** $CRITICAL_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "- **High Vulnerabilities:** $HIGH_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "- **Medium Vulnerabilities:** $MEDIUM_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image:** ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Scan Date:** $(date)" >> $GITHUB_STEP_SUMMARY
+
+    - name: Upload scan results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: trivy-scan-results
+        path: trivy-results.json
+
+    - name: Security Gate
+      if: github.ref == 'refs/heads/master' && steps.scan-results.outputs.critical-count > 0
+      run: |
+        echo "::error::Critical vulnerabilities found on master branch! Failing pipeline."
+        echo "Critical vulnerabilities: ${{ steps.scan-results.outputs.critical-count }}"
+        exit 1
+
+  deploy:
+    name: Deploy to Azure Container Apps
+    runs-on: ubuntu-latest
+    needs: [build, security-scan]
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Get Resource Names from Latest Deployment
+      id: get-resources
+      run: |
+        # Get the most recent successful deployment for this resource group
+        LATEST_DEPLOYMENT=$(az deployment group list \
+          -g ${{ env.RESOURCE_GROUP }} \
+          --query "max_by([?properties.provisioningState=='Succeeded'], &properties.timestamp).name" -o tsv)
+        
+        if [ -z "$LATEST_DEPLOYMENT" ] || [ "$LATEST_DEPLOYMENT" = "null" ]; then
+          echo "::error::No successful deployments found in resource group ${{ env.RESOURCE_GROUP }}"
+          echo "Please ensure infrastructure has been deployed using the Bicep template first."
+          exit 1
+        fi
+        
+        echo "Using deployment: $LATEST_DEPLOYMENT"
+        
+        # Get resource names from deployment outputs
+        CONTAINER_APP_NAME=$(az deployment group show \
+          -g ${{ env.RESOURCE_GROUP }} \
+          -n $LATEST_DEPLOYMENT \
+          --query "properties.outputs.containerAppName.value" -o tsv)
+        APIM_NAME=$(az deployment group show \
+          -g ${{ env.RESOURCE_GROUP }} \
+          -n $LATEST_DEPLOYMENT \
+          --query "properties.outputs.apiManagementName.value" -o tsv)
+        
+        if [ -z "$CONTAINER_APP_NAME" ] || [ "$APIM_NAME" = "null" ]; then
+          echo "::error::Failed to retrieve resource names from deployment outputs"
+          exit 1
+        fi
+        
+        echo "container-app-name=$CONTAINER_APP_NAME" >> $GITHUB_OUTPUT
+        echo "apim-name=$APIM_NAME" >> $GITHUB_OUTPUT
+        
+        echo "### Deployment Resources 🚀" >> $GITHUB_STEP_SUMMARY
+        echo "- **Deployment:** $LATEST_DEPLOYMENT" >> $GITHUB_STEP_SUMMARY
+        echo "- **Container App:** $CONTAINER_APP_NAME" >> $GITHUB_STEP_SUMMARY
+        echo "- **API Management:** $APIM_NAME" >> $GITHUB_STEP_SUMMARY
+
+    - name: Deploy to Azure Container Apps
+      run: |
+        echo "Updating Container App ${{ steps.get-resources.outputs.container-app-name }} with new image..."
+        az containerapp update \
+          --name ${{ steps.get-resources.outputs.container-app-name }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }} \
+          --set-env-vars \
+            NODE_ENV=production \
+            PORT=3000 \
+            BUILD_VERSION=${{ github.run_number }}
+
+    - name: Update APIM Backend Configuration
+      run: |
+        # Get Container App FQDN
+        FQDN=$(az containerapp show \
+          --name ${{ steps.get-resources.outputs.container-app-name }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --query properties.configuration.ingress.fqdn -o tsv)
+        
+        if [ -z "$FQDN" ]; then
+          echo "::error::Failed to get Container App FQDN"
+          exit 1
+        fi
+        
+        echo "Container App FQDN: $FQDN"
+        
+        # Update APIM backend with new Container App URL
+        az apim backend update \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --service-name ${{ steps.get-resources.outputs.apim-name }} \
+          --backend-id claim-status-backend \
+          --url "https://$FQDN" || {
+            echo "::warning::Failed to update APIM backend. This may be expected if backend doesn't exist yet."
+          }
+        
+        echo "### Deployment Complete ✅" >> $GITHUB_STEP_SUMMARY
+        echo "- **Container App URL:** https://$FQDN" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image Version:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+
+    - name: Azure Logout
+      if: always()
+      run: az logout
