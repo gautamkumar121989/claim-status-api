@@ -117,10 +117,12 @@ ContainerAppConsoleLogs_CL
 
 ### KQL Query:
 ```kql
-ApiManagementGatewayLogs
-| where ApiId == "claim-status-api"
+ContainerAppConsoleLogs_CL
+| where ContainerName_s == "claim-status-api"
 | where TimeGenerated >= ago(5m)
-| where ResponseCode == 429
+| where Log_s contains "Request completed"
+| extend StatusCode = extract(@"Status: (\d+)", 1, Log_s)
+| where toint(StatusCode) == 429
 | summarize ViolationCount = count()
 | where ViolationCount > 20
 ```
@@ -163,10 +165,13 @@ ContainerInstanceLog_CL
 
 ### KQL Query:
 ```kql
-ApiManagementGatewayLogs
-| where ApiId == "claim-status-api"
+ContainerAppConsoleLogs_CL
+| where ContainerName_s == "claim-status-api"
 | where TimeGenerated >= ago(5m)
-| where ResponseCode in (401, 403)
+| where Log_s contains "Request completed"
+| extend StatusCode = extract(@"Status: (\d+)", 1, Log_s)
+| extend ClientIP = extract(@"IP: ([\d\.]+)", 1, Log_s)
+| where toint(StatusCode) in (401, 403)
 | summarize FailureCount = count() by ClientIP
 | where FailureCount > 10
 ```
@@ -186,9 +191,10 @@ ApiManagementGatewayLogs
 
 ### KQL Query:
 ```kql
-ApiManagementGatewayLogs
-| where ApiId == "claim-status-api"
+ContainerAppConsoleLogs_CL
+| where ContainerName_s == "claim-status-api"
 | where TimeGenerated >= ago(15m)
+| where Log_s contains "Request completed"
 | summarize RequestCount = count()
 | where RequestCount < 5
 ```
