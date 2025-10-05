@@ -42,7 +42,7 @@ The solution implements a modern cloud-native architecture with the following co
 │   └── kql-queries.md             # Log Analytics KQL queries
 ├── pipelines/
 │   └── azure-pipelines.yml       # Azure DevOps pipeline
-├── scans/                         # Security scan results (generated)
+├                        
 └── src/
     ├── aiService.js               # Azure OpenAI integration service
     └── server.js                  # Express.js API server
