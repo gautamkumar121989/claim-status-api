@@ -13,7 +13,7 @@ The solution implements a modern cloud-native architecture with the following co
 - **Azure Log Analytics**: Centralized logging and monitoring
 - **Azure Application Insights**: Application performance monitoring
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 ├── .env.example                    # Environment configuration template
@@ -48,7 +48,7 @@ The solution implements a modern cloud-native architecture with the following co
     └── server.js                  # Express.js API server
 ```
 
-## 📋 Lab Objectives Implemented
+## Lab Objectives Implemented
 
 ✅ **API Development**: RESTful API with health checks and claim endpoints  
 ✅ **Containerization**: Docker container with security best practices  
@@ -59,7 +59,7 @@ The solution implements a modern cloud-native architecture with the following co
 ✅ **GenAI Integration**: Azure OpenAI for intelligent claim summaries  
 ✅ **CI/CD Pipeline**: Automated build, test, scan, and deployment  
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Run Locally
 ```bash
@@ -88,7 +88,7 @@ docker build -t claim-status-api .
 docker run -p 3000:3000 --env-file .env claim-status-api
 ```
 
-## ☁️ Deploy to Azure
+## Deploy to Azure
 
 ### Option A: Automated Deployment (Recommended)
 ```bash
@@ -178,7 +178,7 @@ curl https://$CONTAINER_APP_FQDN/claims/CLM001
 curl -X POST https://$CONTAINER_APP_FQDN/claims/CLM001/summarize
 ```
 
-## 📋 **Important Notes**
+## **Important Notes**
 
 ### Resource Naming Convention
 All Azure resources use the pattern `${prefix}-${type}-${environment}`:
@@ -197,7 +197,7 @@ All Azure resources use the pattern `${prefix}-${type}-${environment}`:
 Both server and APIM enforce the pattern `CLM###` (e.g., CLM001, CLM002).
 Invalid formats return 400 Bad Request.
 
-## 🔗 API Endpoints
+## API Endpoints
 
 ### Base URLs
 - **Local**: `http://localhost:3000`
