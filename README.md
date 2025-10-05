@@ -421,14 +421,6 @@ This project supports both GitHub Actions and Azure DevOps pipelines for maximum
 
 The GitHub Actions workflow provides a comprehensive CI/CD pipeline with security scanning, dynamic resource discovery, and automated deployment.
 
-#### Features
-- ✅ **Multi-stage pipeline**: Build → Security Scan → Deploy
-- ✅ **Trivy security scanning** with configurable gates
-- ✅ **Dynamic resource discovery** (finds Container Apps and APIM automatically)
-- ✅ **APIM integration** with API definition import
-- ✅ **Environment protection** for production deployments
-- ✅ **Comprehensive logging** and deployment summaries
-
 #### Setup Instructions
 
 1. **Fork/Clone Repository**
