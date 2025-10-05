@@ -40,19 +40,27 @@ class AIService {
     }
 
     try {
-      const system = 'You are an experienced insurance claims analyst. Output ONLY valid JSON.';
-      const prompt = `Return strict JSON with keys: summary, customerSummary, adjusterSummary, nextStep.
+      const system = 'You are an experienced insurance claims analyst. Generate natural language summaries as simple strings, not structured data. Return ONLY valid JSON with exactly 4 string fields.';
+      const prompt = `Generate claim summaries as JSON with these exact keys: summary, customerSummary, adjusterSummary, nextStep.
 
-Claim:
-ID: ${claim.claimNumber}
-Type: ${claim.type}
-Status: ${claim.status}
-EstimatedAmount: $${claim.estimatedAmount}
-Description: ${claim.description}
+Each value must be a single narrative string (not objects or arrays).
 
-Notes (${safeNotes.length} chars):
-${safeNotes || '(no notes)'}
-`;
+Claim Details:
+- ID: ${claim.claimNumber}
+- Type: ${claim.type}
+- Status: ${claim.status}
+- Amount: $${claim.estimatedAmount}
+- Description: ${claim.description}
+
+Notes: ${safeNotes || '(no notes available)'}
+
+Return format example:
+{
+  "summary": "Brief professional overview of the claim in 1-2 sentences",
+  "customerSummary": "Customer-friendly explanation of current status and what happens next",
+  "adjusterSummary": "Technical assessment for adjusters with key details and next actions",
+  "nextStep": "Specific next action to take on this claim"
+}`;
 
       const response = await this.client.getChatCompletions(
         this.deploymentName,
@@ -60,33 +68,41 @@ ${safeNotes || '(no notes)'}
           { role: 'system', content: system },
           { role: 'user', content: prompt }
         ],
-        { maxTokens: 450, temperature: 0.3 }
+        { maxTokens: 500, temperature: 0.3 }
       );
 
       const raw = response.choices?.[0]?.message?.content?.trim() || '';
       
-      // Improved JSON parsing
+      // Extract JSON from response
       const jsonBlockMatch = raw.match(/\{[\s\S]*\}/);
       const candidate = jsonBlockMatch ? jsonBlockMatch[0] : raw;
       
       let parsed;
       try {
         parsed = JSON.parse(candidate);
-      } catch {
-        // Fallback parsing
+        
+        // Validate that we got string responses, not objects
+        if (typeof parsed.summary === 'object' || typeof parsed.customerSummary === 'object') {
+          throw new Error('AI returned structured data instead of strings');
+        }
+        
+      } catch (parseError) {
+        console.warn(`AI JSON parse failed: ${parseError.message}. Raw response: ${raw.slice(0, 200)}`);
+        // Improved fallback with actual AI content
+        const sentences = raw.split(/[.!?]+/).filter(s => s.trim().length > 10);
         parsed = {
-          summary: raw.slice(0, 400),
-          customerSummary: raw.slice(0, 400),
-          adjusterSummary: raw.slice(0, 400),
-          nextStep: 'Review claim details'
+          summary: sentences[0]?.trim() + '.' || 'AI summary generation failed',
+          customerSummary: sentences[1]?.trim() + '.' || 'Please check back for updates on your claim',
+          adjusterSummary: sentences[2]?.trim() + '.' || 'Manual review required for this claim',
+          nextStep: sentences[3]?.trim() + '.' || 'Continue standard claim processing workflow'
         };
       }
 
       return {
-        summary: parsed.summary || 'Summary unavailable',
-        customerSummary: parsed.customerSummary || parsed.summary || 'Customer summary unavailable',
-        adjusterSummary: parsed.adjusterSummary || parsed.summary || 'Adjuster summary unavailable',
-        nextStep: parsed.nextStep || 'No next step identified',
+        summary: String(parsed.summary || 'Summary unavailable'),
+        customerSummary: String(parsed.customerSummary || parsed.summary || 'Customer summary unavailable'),
+        adjusterSummary: String(parsed.adjusterSummary || parsed.summary || 'Adjuster summary unavailable'),
+        nextStep: String(parsed.nextStep || 'No next step identified'),
         usageTokens: response.usage?.totalTokens || 0
       };
     } catch (error) {
